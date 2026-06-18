@@ -1,37 +1,78 @@
 import * as fs from "fs";
 import * as readline from "readline";
+import { z } from "zod";
 
 /**
- * This is a JSDoc comment. Similar to JavaDoc, it documents a public-facing
- * function for others to use. Most modern editors will show the comment when 
- * mousing over this function name. Try it in run-parser.ts!
- * 
- * File I/O in TypeScript is "asynchronous", meaning that we can't just
- * read the file and return its contents. You'll learn more about this 
- * in class. For now, just leave the "async" and "await" where they are. 
- * You shouldn't need to alter them.
- * 
- * @param path The path to the file being loaded.
- * @returns a "promise" to produce a 2-d array of cell values
+ * Splits one CSV line into fields, respecting double-quoted fields that may
+ * contain commas. A double-quote inside a quoted field is escaped as "".
+ * E.g.: Caesar, Julius, "veni, vidi, vici"  →  ["Caesar", "Julius", "veni, vidi, vici"]
  */
-export async function parseCSV(path: string): Promise<string[][]> {
-  // This initial block of code reads from a file in Node.js. The "rl"
-  // value can be iterated over in a "for" loop. 
+export function parseCSVLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"';
+          i++; // skip the escaped second quote
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        fields.push(current.trim());
+        current = "";
+      } else {
+        current += ch;
+      }
+    }
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
+/**
+ * Parses a CSV file and returns a typed array using the provided Zod schema.
+ * The schema is applied to each row (as a string[]), so it defines how raw
+ * string fields are validated and/or transformed into the output type T.
+ *
+ * @param path       Path to the CSV file.
+ * @param rowSchema  Zod schema that validates/transforms one row (string[]) → T.
+ * @param hasHeaders If true, the first row is treated as column headers and skipped.
+ * @returns A promise resolving to T[], one entry per data row.
+ */
+export async function parseCSV<T>(
+  path: string,
+  rowSchema: z.ZodType<T>,
+  hasHeaders: boolean = false
+): Promise<T[]> {
   const fileStream = fs.createReadStream(path);
   const rl = readline.createInterface({
     input: fileStream,
-    crlfDelay: Infinity, // handle different line endings
+    crlfDelay: Infinity,
   });
-  
-  // Create an empty array to hold the results
-  let result = []
-  
-  // We add the "await" here because file I/O is asynchronous. 
-  // We need to force TypeScript to _wait_ for a row before moving on. 
-  // More on this in class soon!
+
+  const result: T[] = [];
+  let isFirstRow = true;
+
   for await (const line of rl) {
-    const values = line.split(",").map((v) => v.trim());
-    result.push(values)
+    if (isFirstRow && hasHeaders) {
+      isFirstRow = false;
+      continue;
+    }
+    isFirstRow = false;
+
+    const fields = parseCSVLine(line);
+    result.push(rowSchema.parse(fields));
   }
-  return result
+  return result;
 }
